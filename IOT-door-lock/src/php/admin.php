@@ -1,8 +1,19 @@
 <?php
 session_start();
 
+define('APP_TIMEZONE', 'America/Lima');
+define('DB_TIMEZONE_OFFSET', '-05:00');
+date_default_timezone_set(APP_TIMEZONE);
+
 // Verificar autenticación
 if (!isset($_SESSION['loggedin'])) {
+    if (isset($_GET['ajax']) && $_GET['ajax'] === 'logs') {
+        http_response_code(401);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
     header('Location: /index.php');
     exit;
 }
@@ -10,6 +21,24 @@ if (!isset($_SESSION['loggedin'])) {
 $db = new mysqli('db', 'root', 'rootpassword', 'rfid_access');
 if ($db->connect_error) {
     die("Error de conexión MySQL: " . $db->connect_error);
+}
+$db->query("SET time_zone = '" . DB_TIMEZONE_OFFSET . "'");
+
+// Endpoint AJAX para refrescar historial sin recargar la página
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'logs') {
+    header('Content-Type: application/json; charset=utf-8');
+
+    $logsData = [];
+    $logs = $db->query("SELECT id, uid, access_status, timestamp FROM logs ORDER BY timestamp DESC LIMIT 100");
+    while ($row = $logs->fetch_assoc()) {
+        $logsData[] = $row;
+    }
+
+    echo json_encode([
+        'updated_at' => date('Y-m-d H:i:s'),
+        'logs' => $logsData,
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
 // Gestión de exportación a CSV
@@ -239,6 +268,12 @@ if (isset($_POST['open_door'])) {
             border-radius: 10px;
             box-shadow: 0 0 20px rgba(0,0,0,0.1);
         }
+
+        .logs-meta {
+            color: #6c757d;
+            font-size: 13px;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -316,11 +351,12 @@ if (isset($_POST['open_door'])) {
         <div class="section" id="logs">
             <h2>📋 Historial de Accesos</h2>
             <a href="?export" class="btn">📥 Descargar como CSV</a>
+            <p class="logs-meta">Actualización automática cada 3 segundos. Última actualización: <span id="logs-updated-at">--</span></p>
             <table>
                 <thead>
                     <tr><th>ID</th><th>UID</th><th>Estado</th><th>Fecha y Hora</th></tr>
                 </thead>
-                <tbody>
+                <tbody id="logs-body">
                     <?php
                     $logs = $db->query("SELECT * FROM logs ORDER BY timestamp DESC LIMIT 100");
                     while ($row = $logs->fetch_assoc()):
@@ -347,5 +383,68 @@ if (isset($_POST['open_door'])) {
         </div>
     </div>
 <?php endif; ?>
+
+<script>
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function renderLogRows(logs) {
+    const body = document.getElementById('logs-body');
+    if (!body) return;
+
+    if (!logs || logs.length === 0) {
+        body.innerHTML = '<tr><td colspan="4">Sin registros todavía</td></tr>';
+        return;
+    }
+
+    body.innerHTML = logs.map((row) => {
+        const isGranted = row.access_status === 'GRANTED';
+        const statusText = isGranted ? '✅ Acceso Permitido' : '❌ Acceso Denegado';
+        const color = isGranted ? 'green' : 'red';
+
+        return '<tr>' +
+            '<td>' + escapeHtml(row.id) + '</td>' +
+            '<td>' + escapeHtml(row.uid) + '</td>' +
+            '<td style="color: ' + color + '; font-weight: bold;">' + statusText + '</td>' +
+            '<td>' + escapeHtml(row.timestamp) + '</td>' +
+        '</tr>';
+    }).join('');
+}
+
+async function refreshLogs() {
+    try {
+        const response = await fetch('/admin.php?ajax=logs', {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json'
+            },
+            cache: 'no-store'
+        });
+
+        if (!response.ok) {
+            return;
+        }
+
+        const payload = await response.json();
+        renderLogRows(payload.logs || []);
+
+        const updatedAtEl = document.getElementById('logs-updated-at');
+        if (updatedAtEl && payload.updated_at) {
+            updatedAtEl.textContent = payload.updated_at;
+        }
+    } catch (error) {
+        // Silently ignore temporary network/UI errors during polling.
+    }
+}
+
+setInterval(refreshLogs, 3000);
+refreshLogs();
+</script>
 </body>
 </html>

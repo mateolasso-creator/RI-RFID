@@ -4,7 +4,7 @@ services:
   web:
     build: .
     ports:
-      - "8080:80"
+      - "8088:80"
     depends_on:
       - db
     environment:
@@ -13,11 +13,16 @@ services:
       - MYSQL_PASSWORD=rootpassword
       - MYSQL_DATABASE=rfid_access
     volumes:
+      # CORRECCIÓN AQUÍ: Según tu imagen, los archivos están en esta ruta
       - ./src/php:/var/www/html
       - door_commands:/var/www/html/door_commands
+    networks:
+      - rfid_net
 
   db:
     image: mysql:8.0
+    container_name: db
+    restart: always
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_DATABASE: rfid_access
@@ -25,8 +30,15 @@ services:
       - "3306:3306"
     volumes:
       - db_data:/var/lib/mysql
+      # Asegúrate de que init.sql esté en la misma carpeta que este archivo yaml
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - rfid_net
 
 volumes:
   db_data:
   door_commands:
+
+networks:
+  rfid_net:
+    driver: bridge
